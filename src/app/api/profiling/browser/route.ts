@@ -1,7 +1,40 @@
+import { NextResponse } from "next/server";
 import { fetchFollowersWithBrowser, type BrowserEvent } from "@/lib/profiling/browser";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+/**
+ * GET /api/profiling/browser
+ *
+ * Check whether the browser-based flow is available in this environment.
+ */
+export async function GET() {
+  const isVercel = !!process.env.VERCEL;
+  const hasChromePath = !!process.env.CHROME_PATH;
+
+  if (isVercel) {
+    return NextResponse.json({ available: false, reason: "serverless" });
+  }
+
+  if (hasChromePath) {
+    return NextResponse.json({ available: true, chrome: process.env.CHROME_PATH });
+  }
+
+  const platform = process.platform;
+  const defaultPath =
+    platform === "darwin"
+      ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      : platform === "win32"
+        ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        : null;
+
+  return NextResponse.json({
+    available: !!defaultPath,
+    chrome: defaultPath,
+    reason: defaultPath ? undefined : "no_chrome_path",
+  });
+}
 
 /**
  * POST /api/profiling/browser
