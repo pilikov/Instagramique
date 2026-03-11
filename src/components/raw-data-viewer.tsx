@@ -22,13 +22,16 @@ export function RawDataViewer() {
   const [data, setData] = useState<Record<string, unknown>>({});
   const [loadingEndpoint, setLoadingEndpoint] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [customMediaId, setCustomMediaId] = useState("");
 
-  const fetchEndpoint = useCallback(async (endpoint: string) => {
+  const fetchEndpoint = useCallback(async (endpoint: string, extraParams?: string) => {
     const token = localStorage.getItem("ig_access_token");
     if (!token) return;
     setLoadingEndpoint(endpoint);
     try {
-      const res = await fetch(`/api/instagram?endpoint=${endpoint}`, {
+      let url = `/api/instagram?endpoint=${endpoint}`;
+      if (extraParams) url += `&${extraParams}`;
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const result = await res.json();
@@ -77,7 +80,94 @@ export function RawDataViewer() {
               {ep.label}
             </Button>
           ))}
+          <Button
+            variant={activeEndpoint === "comments" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setActiveEndpoint("comments")}
+            className="text-xs"
+          >
+            Комменты
+          </Button>
+          <Button
+            variant={activeEndpoint === "debug" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setActiveEndpoint("debug")}
+            className="text-xs"
+          >
+            Debug
+          </Button>
         </div>
+
+        {(activeEndpoint === "comments" || activeEndpoint === "debug") && (
+          <div className="flex items-center gap-2 mb-4">
+            <input
+              type="text"
+              placeholder="Введите media_id (или оставьте пусто для авто)"
+              value={customMediaId}
+              onChange={(e) => setCustomMediaId(e.target.value)}
+              className="flex-1 px-3 py-1.5 text-xs rounded border bg-background"
+            />
+            <Button
+              size="sm"
+              onClick={async () => {
+                const token = localStorage.getItem("ig_access_token");
+                if (!token) return;
+                setLoadingEndpoint(activeEndpoint);
+
+                try {
+                  let mediaId = customMediaId;
+
+                  if (!mediaId) {
+                    const mediaRes = await fetch("/api/instagram?endpoint=media&limit=5", {
+                      headers: { Authorization: `Bearer ${token}` },
+                    });
+                    const mediaData = await mediaRes.json();
+                    const postWithComments = mediaData.data?.find(
+                      (m: Record<string, unknown>) => (m.comments_count as number) > 0
+                    ) || mediaData.data?.[0];
+                    mediaId = postWithComments?.id;
+                  }
+
+                  if (!mediaId) {
+                    setData((prev) => ({ ...prev, [activeEndpoint]: { error: "No media found" } }));
+                    return;
+                  }
+
+                  if (activeEndpoint === "debug") {
+                    const directRes = await fetch(
+                      `https://graph.instagram.com/v21.0/${mediaId}?fields=id,caption,comments_count,like_count,media_type,timestamp,comments{id,text,username,timestamp}&access_token=${token}`
+                    );
+                    const directData = await directRes.json();
+                    setData((prev) => ({
+                      ...prev,
+                      debug: {
+                        _media_id: mediaId,
+                        _note: "Direct call to graph.instagram.com with comments subfield",
+                        response: directData,
+                      },
+                    }));
+                  } else {
+                    const commentsRes = await fetch(
+                      `/api/instagram?endpoint=comments&media_id=${mediaId}`,
+                      { headers: { Authorization: `Bearer ${token}` } }
+                    );
+                    const commentsData = await commentsRes.json();
+                    setData((prev) => ({
+                      ...prev,
+                      comments: { _media_id: mediaId, response: commentsData },
+                    }));
+                  }
+                } catch (err) {
+                  setData((prev) => ({ ...prev, [activeEndpoint]: { error: String(err) } }));
+                } finally {
+                  setLoadingEndpoint(null);
+                }
+              }}
+            >
+              Тест
+            </Button>
+          </div>
+        )}
 
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">

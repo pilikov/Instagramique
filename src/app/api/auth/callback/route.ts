@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     const appSecret = process.env.INSTAGRAM_APP_SECRET!;
     const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/callback`;
 
-    // 1. Exchange code for short-lived token (Instagram Login endpoint)
+    // 1. Exchange code for short-lived token via Instagram Login
     const tokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     if (!tokenData.access_token) {
       return NextResponse.redirect(
         new URL(
-          `/?error=${encodeURIComponent(JSON.stringify(tokenData))}`,
+          `/?error=${encodeURIComponent("Не удалось получить токен: " + JSON.stringify(tokenData))}`,
           request.url
         )
       );

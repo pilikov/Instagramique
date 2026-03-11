@@ -6,7 +6,6 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const accessToken = request.headers.get("Authorization")?.replace("Bearer ", "");
   const endpoint = searchParams.get("endpoint");
-  const userId = searchParams.get("user_id");
 
   if (!accessToken) {
     return NextResponse.json({ error: "No access token" }, { status: 401 });
@@ -14,7 +13,7 @@ export async function GET(request: NextRequest) {
 
   try {
     let url = "";
-    const id = userId || "me";
+    const id = "me";
 
     switch (endpoint) {
       case "profile":
@@ -47,7 +46,7 @@ export async function GET(request: NextRequest) {
         if (!insightMediaId) {
           return NextResponse.json({ error: "media_id required" }, { status: 400 });
         }
-        url = `${GRAPH_API}/${insightMediaId}/insights?metric=impressions,reach,saved,views,likes,comments,shares,plays,total_interactions&access_token=${accessToken}`;
+        url = `${GRAPH_API}/${insightMediaId}/insights?metric=reach,saved,views,likes,comments,shares,total_interactions&access_token=${accessToken}`;
         break;
       }
 
@@ -55,7 +54,7 @@ export async function GET(request: NextRequest) {
         const period = searchParams.get("period") || "day";
         const since = searchParams.get("since");
         const until = searchParams.get("until");
-        let metricsUrl = `${GRAPH_API}/${id}/insights?metric=impressions,reach,profile_views,accounts_engaged,total_interactions&period=${period}&access_token=${accessToken}`;
+        let metricsUrl = `${GRAPH_API}/${id}/insights?metric=reach,follower_count,profile_views,accounts_engaged,total_interactions,likes,comments,shares,saves,views&period=${period}&access_token=${accessToken}`;
         if (since) metricsUrl += `&since=${since}`;
         if (until) metricsUrl += `&until=${until}`;
         url = metricsUrl;
@@ -69,6 +68,16 @@ export async function GET(request: NextRequest) {
       case "live_media":
         url = `${GRAPH_API}/${id}/live_media?fields=id,media_type,timestamp,permalink&access_token=${accessToken}`;
         break;
+
+      case "business_discovery": {
+        const targetUser = searchParams.get("username");
+        if (!targetUser) {
+          return NextResponse.json({ error: "username required" }, { status: 400 });
+        }
+        const bdFields = "id,username,name,biography,profile_picture_url,followers_count,follows_count,media_count,website,media{id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count}";
+        url = `${GRAPH_API}/${id}?fields=business_discovery.username(${targetUser}){${bdFields}}&access_token=${accessToken}`;
+        break;
+      }
 
       default:
         return NextResponse.json({ error: "Unknown endpoint" }, { status: 400 });

@@ -33,6 +33,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# profiling data store
+/data/
+
 # IDE
 .idea
 .vscode

@@ -25,7 +25,7 @@ export default function HomePage() {
       `?client_id=${appId}` +
       `&redirect_uri=${encodeURIComponent(redirectUri)}` +
       `&response_type=code` +
-      `&scope=instagram_business_basic%2Cinstagram_business_manage_comments%2Cinstagram_business_content_publish`;
+      `&scope=instagram_business_basic%2Cinstagram_business_manage_comments%2Cinstagram_business_manage_insights%2Cinstagram_business_content_publish`;
 
     window.location.href = authUrl;
   };

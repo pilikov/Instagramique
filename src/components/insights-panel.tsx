@@ -15,31 +15,33 @@ interface InsightsPanelProps {
 }
 
 const insightIcons: Record<string, typeof Eye> = {
-  impressions: Eye,
   reach: Users,
+  follower_count: Users,
   views: Eye,
   likes: Heart,
   comments: MessageCircle,
   shares: Share2,
   saved: Bookmark,
-  plays: TrendingUp,
+  saves: Bookmark,
   total_interactions: BarChart3,
   profile_views: Eye,
   accounts_engaged: Users,
+  content_views: Eye,
 };
 
 const insightLabels: Record<string, string> = {
-  impressions: "Показы",
   reach: "Охват",
+  follower_count: "Подписчики",
   views: "Просмотры",
   likes: "Лайки",
   comments: "Комментарии",
   shares: "Репосты",
   saved: "Сохранения",
-  plays: "Воспроизведения",
+  saves: "Сохранения",
   total_interactions: "Взаимодействия",
   profile_views: "Просмотры профиля",
   accounts_engaged: "Активные аккаунты",
+  content_views: "Просмотры контента",
 };
 
 export function InsightsPanel({ media, loading }: InsightsPanelProps) {

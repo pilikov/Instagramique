@@ -11,9 +11,12 @@ import { CommentsList } from "@/components/comments-list";
 import { InsightsPanel } from "@/components/insights-panel";
 import { RawDataViewer } from "@/components/raw-data-viewer";
 import type { InstagramProfile, InstagramMedia } from "@/lib/types";
+import { FollowersTable } from "@/components/profiling/followers-table";
+import { AnalyticsSummary } from "@/components/profiling/analytics-summary";
 import {
   Instagram, LogOut, Sun, Moon, ImageIcon, Film,
-  Clock, MessageCircle, BarChart3, Code, LayoutDashboard, RefreshCw
+  Clock, MessageCircle, BarChart3, Code, LayoutDashboard, RefreshCw,
+  Users, PieChart,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 
@@ -32,11 +35,9 @@ export default function DashboardPage() {
 
   const fetchAPI = useCallback(async (endpoint: string, params?: Record<string, string>) => {
     const token = localStorage.getItem("ig_access_token");
-    const userId = localStorage.getItem("ig_user_id");
     if (!token) throw new Error("No token");
 
     const searchParams = new URLSearchParams({ endpoint });
-    if (userId) searchParams.set("user_id", userId);
     if (params) Object.entries(params).forEach(([k, v]) => searchParams.set(k, v));
 
     const res = await fetch(`/api/instagram?${searchParams}`, {
@@ -191,6 +192,14 @@ export default function DashboardPage() {
                 <BarChart3 className="w-4 h-4" />
                 <span className="hidden sm:inline">Инсайты</span>
               </TabsTrigger>
+              <TabsTrigger value="profiling" className="gap-1.5">
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">Профилирование</span>
+              </TabsTrigger>
+              <TabsTrigger value="audience" className="gap-1.5">
+                <PieChart className="w-4 h-4" />
+                <span className="hidden sm:inline">Аудитория</span>
+              </TabsTrigger>
               <TabsTrigger value="raw" className="gap-1.5">
                 <Code className="w-4 h-4" />
                 <span className="hidden sm:inline">API</span>
@@ -242,6 +251,14 @@ export default function DashboardPage() {
 
             <TabsContent value="insights">
               <InsightsPanel media={media} loading={loadingMedia} />
+            </TabsContent>
+
+            <TabsContent value="profiling">
+              <FollowersTable />
+            </TabsContent>
+
+            <TabsContent value="audience">
+              <AnalyticsSummary />
             </TabsContent>
 
             <TabsContent value="raw">

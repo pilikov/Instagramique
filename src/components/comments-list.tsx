@@ -17,13 +17,14 @@ interface CommentsListProps {
 
 export function CommentsList({ media, loading }: CommentsListProps) {
   const [comments, setComments] = useState<Record<string, InstagramComment[]>>({});
+  const [commentErrors, setCommentErrors] = useState<Record<string, string>>({});
   const [loadingComments, setLoadingComments] = useState<Record<string, boolean>>({});
   const [expandedMedia, setExpandedMedia] = useState<string[]>([]);
 
   const postsWithComments = media.filter((m) => m.comments_count && m.comments_count > 0);
 
   const loadComments = useCallback(async (mediaId: string) => {
-    if (comments[mediaId]) {
+    if (comments[mediaId] || commentErrors[mediaId]) {
       setExpandedMedia((prev) =>
         prev.includes(mediaId) ? prev.filter((id) => id !== mediaId) : [...prev, mediaId]
       );
@@ -40,20 +41,27 @@ export function CommentsList({ media, loading }: CommentsListProps) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      if (data.data) {
+      if (data.error) {
+        setCommentErrors((prev) => ({ ...prev, [mediaId]: data.error }));
+        setExpandedMedia((prev) => [...prev, mediaId]);
+      } else if (data.data) {
         setComments((prev) => ({ ...prev, [mediaId]: data.data }));
         setExpandedMedia((prev) => [...prev, mediaId]);
       }
-    } catch {
-      // silently fail
+    } catch (err) {
+      setCommentErrors((prev) => ({
+        ...prev,
+        [mediaId]: err instanceof Error ? err.message : "Ошибка загрузки",
+      }));
+      setExpandedMedia((prev) => [...prev, mediaId]);
     } finally {
       setLoadingComments((prev) => ({ ...prev, [mediaId]: false }));
     }
-  }, [comments]);
+  }, [comments, commentErrors]);
 
   useEffect(() => {
-    if (postsWithComments.length > 0 && postsWithComments.length <= 3) {
-      postsWithComments.forEach((p) => loadComments(p.id));
+    if (postsWithComments.length > 0) {
+      postsWithComments.slice(0, 3).forEach((p) => loadComments(p.id));
     }
   }, [media.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -121,8 +129,17 @@ export function CommentsList({ media, loading }: CommentsListProps) {
                     )}
                   </button>
 
+                  {expandedMedia.includes(post.id) && commentErrors[post.id] && (
+                    <div className="mt-3 p-2 rounded bg-destructive/10 text-destructive text-xs">
+                      Ошибка: {commentErrors[post.id]}
+                    </div>
+                  )}
+
                   {expandedMedia.includes(post.id) && comments[post.id] && (
                     <div className="mt-3 space-y-2 pl-2 border-l-2 border-primary/20">
+                      {comments[post.id].length === 0 && (
+                        <p className="text-xs text-muted-foreground py-1">Комментарии не найдены</p>
+                      )}
                       {comments[post.id].map((comment) => (
                         <div key={comment.id} className="py-2">
                           <div className="flex items-start gap-2">

@@ -9,7 +9,6 @@ export function useInstagramAPI<T>(endpoint: string, params?: Record<string, str
 
   const fetchData = useCallback(async () => {
     const token = localStorage.getItem("ig_access_token");
-    const userId = localStorage.getItem("ig_user_id");
 
     if (!token) {
       setError("Нет токена авторизации");
@@ -22,7 +21,6 @@ export function useInstagramAPI<T>(endpoint: string, params?: Record<string, str
       setError(null);
 
       const searchParams = new URLSearchParams({ endpoint });
-      if (userId) searchParams.set("user_id", userId);
       if (params) {
         Object.entries(params).forEach(([k, v]) => searchParams.set(k, v));
       }
