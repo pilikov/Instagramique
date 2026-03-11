@@ -1,7 +1,58 @@
 import path from "path";
+import fs from "fs";
 import type { FollowerRawPayload } from "./types";
 
 const CHROME_PROFILE_DIR = path.join(process.cwd(), "data", "chrome-profile");
+
+function findChrome(): string {
+  if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+    return process.env.CHROME_PATH;
+  }
+
+  const candidates = [
+    // macOS
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    path.join(process.env.HOME || "~", "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    // Linux
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    // Windows
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  ];
+
+  // Also check Puppeteer's cache in the real user home
+  const homes = [process.env.HOME, "/Users/pda", process.env.USERPROFILE].filter(Boolean) as string[];
+  for (const home of homes) {
+    const cacheDir = path.join(home, ".cache", "puppeteer", "chrome");
+    if (fs.existsSync(cacheDir)) {
+      try {
+        for (const ver of fs.readdirSync(cacheDir)) {
+          const verDir = path.join(cacheDir, ver);
+          const subDirs = fs.readdirSync(verDir);
+          for (const sub of subDirs) {
+            const appPath = path.join(verDir, sub, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
+            if (fs.existsSync(appPath)) candidates.unshift(appPath);
+            const binPath = path.join(verDir, sub, "chrome");
+            if (fs.existsSync(binPath)) candidates.unshift(binPath);
+          }
+        }
+      } catch { /* scan failed, continue */ }
+    }
+  }
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+
+  throw new Error(
+    "Chrome не найден. Установите Google Chrome или укажите путь в переменной CHROME_PATH в .env.local"
+  );
+}
 
 export type BrowserEventType = "status" | "progress" | "login_required" | "done" | "error";
 
@@ -33,10 +84,19 @@ export async function fetchFollowersWithBrowser(onProgress: ProgressFn): Promise
 
   const puppeteer = await import("puppeteer");
 
+  let chromePath: string;
+  try {
+    chromePath = findChrome();
+  } catch (err) {
+    onProgress({ type: "error", message: (err as Error).message });
+    return;
+  }
+
   onProgress({ type: "status", message: "Запуск браузера..." });
 
   const browser = await puppeteer.default.launch({
     headless: false,
+    executablePath: chromePath,
     userDataDir: CHROME_PROFILE_DIR,
     defaultViewport: { width: 1280, height: 900 },
     args: [
