@@ -5,52 +5,35 @@ import type { FollowerRawPayload } from "./types";
 const CHROME_PROFILE_DIR = path.join(process.cwd(), "data", "chrome-profile");
 
 function findChrome(): string {
-  if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+  // CHROME_PATH from .env.local — trust it directly,
+  // fs.existsSync may fail in sandbox environments
+  if (process.env.CHROME_PATH) {
     return process.env.CHROME_PATH;
   }
 
-  const candidates = [
-    // macOS
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    path.join(process.env.HOME || "~", "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    // Linux
+  // Well-known paths — try without fs check since sandbox may not see host FS
+  const platform = process.platform;
+
+  if (platform === "darwin") {
+    return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  }
+  if (platform === "win32") {
+    return "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+  }
+
+  // Linux candidates
+  const linuxPaths = [
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium-browser",
     "/usr/bin/chromium",
-    // Windows
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   ];
-
-  // Also check Puppeteer's cache in the real user home
-  const homes = [process.env.HOME, "/Users/pda", process.env.USERPROFILE].filter(Boolean) as string[];
-  for (const home of homes) {
-    const cacheDir = path.join(home, ".cache", "puppeteer", "chrome");
-    if (fs.existsSync(cacheDir)) {
-      try {
-        for (const ver of fs.readdirSync(cacheDir)) {
-          const verDir = path.join(cacheDir, ver);
-          const subDirs = fs.readdirSync(verDir);
-          for (const sub of subDirs) {
-            const appPath = path.join(verDir, sub, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
-            if (fs.existsSync(appPath)) candidates.unshift(appPath);
-            const binPath = path.join(verDir, sub, "chrome");
-            if (fs.existsSync(binPath)) candidates.unshift(binPath);
-          }
-        }
-      } catch { /* scan failed, continue */ }
-    }
-  }
-
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+  for (const p of linuxPaths) {
+    try { if (fs.existsSync(p)) return p; } catch { /* continue */ }
   }
 
   throw new Error(
-    "Chrome не найден. Установите Google Chrome или укажите путь в переменной CHROME_PATH в .env.local"
+    "Chrome не найден. Укажите путь в переменной CHROME_PATH в .env.local"
   );
 }
 
