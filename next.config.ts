@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "platform-lookaside.fbsbx.com" },
     ],
   },
+  serverExternalPackages: ["puppeteer"],
 };
 
 export default nextConfig;
