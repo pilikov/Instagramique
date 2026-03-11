@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scrapeProfile, scrapeBatch, type ScrapeOptions } from "@/lib/profiling/scraper";
+import {
+  scrapeProfile,
+  scrapeBatch,
+  fetchFollowersList,
+  resolveUserId,
+  type ScrapeOptions,
+} from "@/lib/profiling/scraper";
 import { profileOne, profileBatch } from "@/lib/profiling/profiler";
 import { getAllProfiles } from "@/lib/profiling/store";
 
 /**
  * POST /api/profiling/scrape
  *
- * Body:
- *   { action: "scrape_one", username: "...", session_id?: "...", csrf_token?: "..." }
- *   { action: "scrape_batch", usernames: ["..."], session_id?: "...", csrf_token?: "..." }
- *   { action: "enrich_all", session_id?: "...", csrf_token?: "..." }
- *     — re-scrape all existing profiles that have low completeness
+ * Actions:
+ *   fetch_followers — fetch the full follower list via Instagram internal API (requires session_id)
+ *   scrape_one      — scrape a single profile
+ *   scrape_batch    — scrape a batch of usernames
+ *   enrich_all      — re-scrape all profiles with low completeness
  */
 export async function POST(request: NextRequest) {
   try {
@@ -24,6 +30,46 @@ export async function POST(request: NextRequest) {
     };
 
     switch (action) {
+      case "fetch_followers": {
+        const sessionId = body.session_id;
+        if (!sessionId) {
+          return NextResponse.json({ error: "session_id required" }, { status: 400 });
+        }
+
+        let userId = body.user_id as string | undefined;
+        if (!userId) {
+          try {
+            userId = await resolveUserId(sessionId);
+          } catch (err) {
+            return NextResponse.json(
+              { error: `Could not resolve user ID: ${err instanceof Error ? err.message : "unknown"}` },
+              { status: 400 }
+            );
+          }
+        }
+
+        const maxPages = Math.min(body.max_pages ?? 50, 200);
+
+        const result = await fetchFollowersList(userId, {
+          sessionId,
+          csrfToken: body.csrf_token,
+          maxPages,
+          pageSize: body.page_size ?? 50,
+          delayMs: body.delay_ms ?? 2000,
+        });
+
+        const { run } = await profileBatch(result.followers);
+
+        return NextResponse.json({
+          run_id: run.id,
+          total_fetched: result.total_fetched,
+          has_more: result.has_more,
+          profiled: run.succeeded,
+          failed: run.failed,
+          user_id: userId,
+        });
+      }
+
       case "scrape_one": {
         const username = body.username;
         if (!username) {

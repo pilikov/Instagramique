@@ -289,6 +289,153 @@ async function scrapeViaHTML(username: string): Promise<ScrapeResult | null> {
   return { raw, source: "html_parse" };
 }
 
+// ── Followers List Fetcher (internal API) ────────────────────
+
+export interface FollowersListResult {
+  followers: FollowerRawPayload[];
+  total_fetched: number;
+  has_more: boolean;
+  next_max_id?: string;
+}
+
+export interface FetchFollowersOptions {
+  sessionId: string;
+  csrfToken?: string;
+  maxPages?: number;
+  pageSize?: number;
+  delayMs?: number;
+  onPage?: (page: number, fetched: number, batch: FollowerRawPayload[]) => void;
+}
+
+/**
+ * Resolve the numeric user PK from a session cookie.
+ * Calls /api/v1/users/web_profile_info/ on the authenticated user's own profile,
+ * or extracts it from the sessionid itself (format: "{pk}%3A...").
+ */
+export async function resolveUserId(sessionId: string): Promise<string> {
+  const pkFromCookie = sessionId.split("%3A")[0] || sessionId.split(":")[0];
+  if (/^\d{5,}$/.test(pkFromCookie)) {
+    return pkFromCookie;
+  }
+
+  const headers = buildSessionHeaders(sessionId);
+  const res = await fetch(
+    "https://www.instagram.com/api/v1/accounts/current_user/?edit=true",
+    { headers }
+  );
+  if (!res.ok) throw new Error(`Failed to resolve user ID: HTTP ${res.status}`);
+
+  const data = await res.json();
+  const pk = data?.user?.pk || data?.user?.pk_id;
+  if (!pk) throw new Error("Could not resolve user ID from session");
+  return String(pk);
+}
+
+/**
+ * Fetch the full list of followers for a given user via Instagram's internal API.
+ * This is the same endpoint the Instagram web app uses when you open the followers modal.
+ *
+ * Requires a valid sessionid cookie from the user's browser.
+ */
+export async function fetchFollowersList(
+  userId: string,
+  opts: FetchFollowersOptions
+): Promise<FollowersListResult> {
+  const maxPages = opts.maxPages ?? 100;
+  const pageSize = opts.pageSize ?? 50;
+  const delay = opts.delayMs ?? 2000;
+  const headers = buildSessionHeaders(opts.sessionId, opts.csrfToken);
+
+  const allFollowers: FollowerRawPayload[] = [];
+  let maxId: string | undefined;
+  let hasMore = true;
+
+  for (let page = 0; page < maxPages && hasMore; page++) {
+    const url = new URL(`https://www.instagram.com/api/v1/friendships/${userId}/followers/`);
+    url.searchParams.set("count", String(pageSize));
+    url.searchParams.set("search_surface", "follow_list_page");
+    if (maxId) url.searchParams.set("max_id", maxId);
+
+    const res = await fetch(url.toString(), { headers });
+
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("Session expired or invalid. Please update your sessionid.");
+    }
+    if (res.status === 429) {
+      throw new Error(`Rate limited by Instagram. Fetched ${allFollowers.length} followers so far. Try again later.`);
+    }
+    if (!res.ok) {
+      throw new Error(`Instagram API error: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    if (data.status !== "ok" && !data.users) {
+      throw new Error(data.message || "Unexpected API response");
+    }
+
+    const users: unknown[] = data.users || [];
+    const batch = users.map(internalUserToRaw);
+
+    allFollowers.push(...batch);
+    hasMore = data.has_more === true || data.big_list === true;
+    maxId = data.next_max_id ? String(data.next_max_id) : undefined;
+
+    if (!maxId) hasMore = false;
+
+    if (opts.onPage) {
+      opts.onPage(page + 1, allFollowers.length, batch);
+    }
+
+    if (hasMore && delay > 0) {
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+
+  return {
+    followers: allFollowers,
+    total_fetched: allFollowers.length,
+    has_more: hasMore,
+    next_max_id: maxId,
+  };
+}
+
+function internalUserToRaw(user: unknown): FollowerRawPayload {
+  const u = user as Record<string, unknown>;
+  return {
+    username: (u.username as string) || "",
+    full_name: (u.full_name as string) || "",
+    profile_picture_url: (u.profile_pic_url as string) || "",
+    is_verified: u.is_verified as boolean | undefined,
+    is_business: (u.is_business as boolean) || (u.account_type as number) === 2 || undefined,
+    account_type: u.is_private ? "PRIVATE" : "PUBLIC",
+  };
+}
+
+function buildSessionHeaders(sessionId: string, csrfToken?: string): Record<string, string> {
+  const cookieParts = [`sessionid=${sessionId}`];
+  if (csrfToken) cookieParts.push(`csrftoken=${csrfToken}`);
+
+  const headers: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    "X-IG-App-ID": IG_APP_ID,
+    Accept: "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-Requested-With": "XMLHttpRequest",
+    Referer: "https://www.instagram.com/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    Cookie: cookieParts.join("; "),
+  };
+
+  if (csrfToken) {
+    headers["X-CSRFToken"] = csrfToken;
+  }
+
+  return headers;
+}
+
 // ── Instagram Data Export Parser ────────────────────────────
 
 export interface InstagramExportFollower {
