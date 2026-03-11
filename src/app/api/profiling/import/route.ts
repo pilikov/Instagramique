@@ -3,6 +3,10 @@ import { randomUUID } from "crypto";
 import type { FollowerRawPayload, ImportRecord } from "@/lib/profiling/types";
 import { profileBatch } from "@/lib/profiling/profiler";
 import { createImport } from "@/lib/profiling/store";
+import {
+  parseInstagramExport,
+  parseInstagramExportHTML,
+} from "@/lib/profiling/scraper";
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,10 +32,26 @@ export async function POST(request: NextRequest) {
         rawProfiles = parseCSV(text);
       } else if (file.name.endsWith(".json")) {
         format = "json";
-        rawProfiles = parseJSON(text);
+        const igExport = parseInstagramExport(text);
+        if (igExport.length > 0) {
+          rawProfiles = igExport.map((f) => ({ username: f.username }));
+        } else {
+          rawProfiles = parseJSON(text);
+        }
+      } else if (file.name.endsWith(".html") || file.name.endsWith(".htm")) {
+        format = "json";
+        const igExportHTML = parseInstagramExportHTML(text);
+        if (igExportHTML.length > 0) {
+          rawProfiles = igExportHTML.map((f) => ({ username: f.username }));
+        } else {
+          return NextResponse.json(
+            { error: "Could not parse HTML file. Expected Instagram data export format." },
+            { status: 400 }
+          );
+        }
       } else {
         return NextResponse.json(
-          { error: "Unsupported file format. Use .csv or .json" },
+          { error: "Unsupported file format. Use .csv, .json or .html" },
           { status: 400 }
         );
       }

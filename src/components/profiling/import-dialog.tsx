@@ -11,7 +11,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Upload, FileText, Loader2, Check, AlertCircle } from "lucide-react";
+import { Upload, FileText, Loader2, Check, AlertCircle, Download, Info } from "lucide-react";
 
 interface ImportDialogProps {
   onImported: () => void;
@@ -26,12 +26,14 @@ interface ImportResult {
   errors: Array<{ username: string; error: string }>;
 }
 
+type Mode = "ig_export" | "file" | "json" | "usernames";
+
 export function ImportDialog({ onImported }: ImportDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"file" | "json" | "usernames">("file");
+  const [mode, setMode] = useState<Mode>("ig_export");
   const [textInput, setTextInput] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -110,11 +112,11 @@ export function ImportDialog({ onImported }: ImportDialogProps) {
           Импорт
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Импорт фолловеров</DialogTitle>
           <DialogDescription>
-            Загрузите CSV/JSON файл или вставьте данные вручную
+            Загрузите экспорт из Instagram, CSV/JSON или вставьте юзернеймы
           </DialogDescription>
         </DialogHeader>
 
@@ -138,27 +140,108 @@ export function ImportDialog({ onImported }: ImportDialogProps) {
                 <p className="text-xs text-muted-foreground">Ошибки</p>
               </div>
             </div>
+            <div className="p-3 rounded-lg bg-blue-500/10 text-sm space-y-1">
+              <p className="font-medium flex items-center gap-1.5">
+                <Info className="w-4 h-4" />
+                Следующий шаг
+              </p>
+              <p className="text-muted-foreground text-xs">
+                Профили импортированы с юзернеймами. Нажмите «Обогатить данные» в таблице,
+                чтобы автоматически загрузить bio, аватарки и статистику для каждого профиля.
+              </p>
+            </div>
             <Button variant="outline" className="w-full" onClick={reset}>
               Импортировать ещё
             </Button>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex gap-1.5">
-              {(["file", "json", "usernames"] as const).map((m) => (
+            {/* Mode tabs */}
+            <div className="flex gap-1 flex-wrap">
+              {([
+                { id: "ig_export" as const, label: "Instagram Export" },
+                { id: "file" as const, label: "CSV / JSON" },
+                { id: "usernames" as const, label: "Юзернеймы" },
+                { id: "json" as const, label: "JSON вручную" },
+              ]).map((m) => (
                 <Button
-                  key={m}
-                  variant={mode === m ? "default" : "outline"}
+                  key={m.id}
+                  variant={mode === m.id ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setMode(m)}
+                  onClick={() => setMode(m.id)}
                   className="text-xs"
                 >
-                  {m === "file" ? "Файл" : m === "json" ? "JSON" : "Юзернеймы"}
+                  {m.label}
                 </Button>
               ))}
             </div>
 
-            {mode === "file" ? (
+            {/* Instagram Export mode */}
+            {mode === "ig_export" && (
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg bg-muted/50 text-xs space-y-2">
+                  <p className="font-medium text-foreground flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5" />
+                    Как скачать свой список фолловеров из Instagram:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+                    <li>Откройте Instagram в браузере или приложении</li>
+                    <li>
+                      <strong>Настройки</strong> → <strong>Центр аккаунтов</strong> →
+                      <strong> Ваша информация и разрешения</strong>
+                    </li>
+                    <li>
+                      <strong>Скачивание информации</strong> → Выберите аккаунт
+                    </li>
+                    <li>
+                      Отметьте <strong>«Подписчики и подписки»</strong>
+                    </li>
+                    <li>
+                      Формат: <strong>JSON</strong>, Качество: любое
+                    </li>
+                    <li>
+                      Нажмите <strong>«Создать файл»</strong> — ссылка придёт на email
+                    </li>
+                    <li>
+                      Скачайте архив, найдите файл{" "}
+                      <code className="bg-muted px-1 rounded">followers_1.json</code>
+                    </li>
+                  </ol>
+                  <p className="text-muted-foreground pt-1">
+                    Файл будет в папке{" "}
+                    <code className="bg-muted px-1 rounded">
+                      connections/followers_and_following/
+                    </code>
+                  </p>
+                </div>
+
+                <div
+                  onClick={() => fileRef.current?.click()}
+                  className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                >
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept=".json,.html,.htm,.csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleFileUpload(f);
+                    }}
+                  />
+                  <FileText className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
+                  <p className="text-sm font-medium">
+                    Загрузите followers_1.json
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    .json или .html из Instagram Data Export
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* CSV/JSON file mode */}
+            {mode === "file" && (
               <div
                 onClick={() => fileRef.current?.click()}
                 className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
@@ -177,15 +260,18 @@ export function ImportDialog({ onImported }: ImportDialogProps) {
                 <p className="text-sm font-medium">Нажмите или перетащите файл</p>
                 <p className="text-xs text-muted-foreground mt-1">.csv или .json</p>
               </div>
-            ) : (
+            )}
+
+            {/* Text input modes */}
+            {(mode === "usernames" || mode === "json") && (
               <div className="space-y-2">
                 <textarea
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
                   placeholder={
                     mode === "usernames"
-                      ? "username1\nusername2\nusername3\n\nили: username1, username2, username3"
-                      : '[\n  {"username": "example", "bio": "Designer"}\n]'
+                      ? "username1\nusername2\nusername3\n\nили: username1, username2, username3\n\nМожно с @: @username1, @username2"
+                      : '[\n  {"username": "example", "bio": "Designer", "followers_count": 1200}\n]'
                   }
                   className="w-full h-40 p-3 text-xs font-mono rounded-lg border bg-background resize-none"
                 />
@@ -200,6 +286,7 @@ export function ImportDialog({ onImported }: ImportDialogProps) {
               </div>
             )}
 
+            {/* Error display */}
             {error && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
                 <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -207,19 +294,22 @@ export function ImportDialog({ onImported }: ImportDialogProps) {
               </div>
             )}
 
-            {loading && mode === "file" && (
+            {loading && (mode === "file" || mode === "ig_export") && (
               <div className="flex items-center justify-center gap-2 py-4">
                 <Loader2 className="w-5 h-5 animate-spin" />
                 <span className="text-sm text-muted-foreground">Обработка...</span>
               </div>
             )}
 
-            <div className="p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground">Формат CSV:</p>
-              <code className="block">username,full_name,bio,followers_count,external_url</code>
-              <p className="font-medium text-foreground mt-2">Формат JSON:</p>
-              <code className="block">{`[{"username":"...", "bio":"...", "followers_count":123}]`}</code>
-            </div>
+            {/* Format help */}
+            {mode === "file" && (
+              <div className="p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground space-y-1">
+                <p className="font-medium text-foreground">Формат CSV:</p>
+                <code className="block">username,full_name,bio,followers_count,external_url</code>
+                <p className="font-medium text-foreground mt-2">Формат JSON:</p>
+                <code className="block">{`[{"username":"...", "bio":"...", "followers_count":123}]`}</code>
+              </div>
+            )}
           </div>
         )}
       </DialogContent>

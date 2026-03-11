@@ -8,8 +8,15 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Users, Search, Filter, RefreshCw, Loader2, ChevronDown, ChevronUp,
-  ArrowUpDown, Eye, Zap,
+  Eye, Zap, Download, Info, Globe,
 } from "lucide-react";
 import { ImportDialog } from "./import-dialog";
 import { ProfileDetail } from "./profile-detail";
@@ -59,6 +66,16 @@ export function FollowersTable() {
   const [reprofilingAll, setReprofilingAll] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
+  const [enrichDialogOpen, setEnrichDialogOpen] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichResult, setEnrichResult] = useState<{
+    total: number;
+    succeeded: number;
+    failed: number;
+  } | null>(null);
+  const [sessionId, setSessionId] = useState("");
+  const [csrfToken, setCsrfToken] = useState("");
+
   const fetchProfiles = useCallback(async () => {
     setLoading(true);
     try {
@@ -101,6 +118,34 @@ export function FollowersTable() {
     }
   };
 
+  const handleEnrich = async () => {
+    setEnriching(true);
+    setEnrichResult(null);
+    try {
+      const res = await fetch("/api/profiling/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "enrich_all",
+          session_id: sessionId || undefined,
+          csrf_token: csrfToken || undefined,
+          delay_ms: 2000,
+        }),
+      });
+      const data = await res.json();
+      setEnrichResult({
+        total: data.total || 0,
+        succeeded: data.succeeded || 0,
+        failed: data.failed || 0,
+      });
+      await fetchProfiles();
+    } catch (err) {
+      setEnrichResult({ total: 0, succeeded: 0, failed: 1 });
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   const toggleSort = (field: string) => {
     if (sortBy === field) {
       setSortOrder(sortOrder === "desc" ? "asc" : "desc");
@@ -109,6 +154,8 @@ export function FollowersTable() {
       setSortOrder("desc");
     }
   };
+
+  const lowCompleteness = profiles.filter((p) => p.source_completeness_score < 0.3).length;
 
   if (selectedProfile) {
     return (
@@ -121,6 +168,35 @@ export function FollowersTable() {
 
   return (
     <div className="space-y-4">
+      {/* Enrich hint */}
+      {total > 0 && lowCompleteness > 0 && (
+        <Card className="border-blue-500/30 bg-blue-500/5">
+          <CardContent className="py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-start gap-2">
+                <Globe className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">
+                    {lowCompleteness} из {total} профилей содержат только юзернейм
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Обогатите данные — скрейпер автоматически загрузит bio, аватарки, статистику с Instagram
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => setEnrichDialogOpen(true)}
+                className="gap-1.5 shrink-0"
+              >
+                <Download className="w-4 h-4" />
+                Обогатить данные
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -136,18 +212,29 @@ export function FollowersTable() {
             <div className="flex items-center gap-2">
               <ImportDialog onImported={fetchProfiles} />
               {total > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleReprofileAll}
-                  disabled={reprofilingAll}
-                  className="gap-1.5"
-                >
-                  {reprofilingAll
-                    ? <Loader2 className="w-4 h-4 animate-spin" />
-                    : <Zap className="w-4 h-4" />}
-                  Перепрофилировать
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEnrichDialogOpen(true)}
+                    className="gap-1.5"
+                  >
+                    <Download className="w-4 h-4" />
+                    Обогатить
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReprofileAll}
+                    disabled={reprofilingAll}
+                    className="gap-1.5"
+                  >
+                    {reprofilingAll
+                      ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : <Zap className="w-4 h-4" />}
+                    Перепрофилировать
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -238,14 +325,12 @@ export function FollowersTable() {
                 }`}
               >
                 {s.label}
-                {sortBy === s.id && (
-                  sortOrder === "desc" ? " ↓" : " ↑"
-                )}
+                {sortBy === s.id && (sortOrder === "desc" ? " ↓" : " ↑")}
               </button>
             ))}
           </div>
 
-          {/* Table */}
+          {/* Profiles list */}
           {loading ? (
             <div className="space-y-2">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -257,7 +342,7 @@ export function FollowersTable() {
               <Users className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p className="font-medium">Нет профилей</p>
               <p className="text-sm mt-1">
-                Импортируйте CSV/JSON с фолловерами или добавьте юзернеймы
+                Импортируйте экспорт из Instagram или добавьте юзернеймы
               </p>
             </div>
           ) : (
@@ -314,6 +399,118 @@ export function FollowersTable() {
           )}
         </CardContent>
       </Card>
+
+      {/* Enrich Dialog */}
+      <Dialog open={enrichDialogOpen} onOpenChange={setEnrichDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Обогащение данных профилей</DialogTitle>
+            <DialogDescription>
+              Скрейпер загрузит публичные данные Instagram-профилей: bio, аватар, статистику
+            </DialogDescription>
+          </DialogHeader>
+
+          {enrichResult ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-green-600">
+                <Zap className="w-5 h-5" />
+                <span className="font-medium">Обогащение завершено</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="p-2 rounded bg-muted/50 text-center">
+                  <p className="text-lg font-bold">{enrichResult.total}</p>
+                  <p className="text-xs text-muted-foreground">Обработано</p>
+                </div>
+                <div className="p-2 rounded bg-muted/50 text-center">
+                  <p className="text-lg font-bold">{enrichResult.succeeded}</p>
+                  <p className="text-xs text-muted-foreground">Успешно</p>
+                </div>
+                <div className="p-2 rounded bg-muted/50 text-center">
+                  <p className="text-lg font-bold">{enrichResult.failed}</p>
+                  <p className="text-xs text-muted-foreground">Ошибки</p>
+                </div>
+              </div>
+              <Button variant="outline" className="w-full" onClick={() => {
+                setEnrichResult(null);
+                setEnrichDialogOpen(false);
+              }}>
+                Закрыть
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-muted/50 text-xs space-y-2">
+                <p className="font-medium text-foreground flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5" />
+                  Как это работает
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                  <li>Скрейпер обрабатывает профили с полнотой данных &lt; 30%</li>
+                  <li>Для каждого username загружается публичная страница Instagram</li>
+                  <li>Извлекаются: имя, bio, аватар, кол-во подписчиков/подписок/постов</li>
+                  <li>Задержка ~2 сек между запросами для безопасности</li>
+                </ul>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-medium">
+                  Session cookie (опционально, для лучших результатов):
+                </p>
+                <div className="space-y-1.5">
+                  <input
+                    type="text"
+                    placeholder="sessionid из cookie Instagram"
+                    value={sessionId}
+                    onChange={(e) => setSessionId(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded border bg-background font-mono"
+                  />
+                  <input
+                    type="text"
+                    placeholder="csrftoken (опционально)"
+                    value={csrfToken}
+                    onChange={(e) => setCsrfToken(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded border bg-background font-mono"
+                  />
+                </div>
+                <div className="p-2 rounded bg-amber-500/10 text-xs text-amber-700 dark:text-amber-400">
+                  <p className="font-medium">Как получить session cookie:</p>
+                  <p className="mt-1">
+                    Откройте instagram.com → DevTools (F12) → Application → Cookies →
+                    скопируйте значение <code className="bg-muted px-1 rounded">sessionid</code>
+                  </p>
+                  <p className="mt-1">
+                    Без cookie скрейпер работает только для публичных профилей
+                    с доступными meta-тегами.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  onClick={handleEnrich}
+                  disabled={enriching}
+                >
+                  {enriching ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      Обогащение...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4 mr-2" />
+                      Запустить ({lowCompleteness} профилей)
+                    </>
+                  )}
+                </Button>
+                <Button variant="outline" onClick={() => setEnrichDialogOpen(false)}>
+                  Отмена
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
