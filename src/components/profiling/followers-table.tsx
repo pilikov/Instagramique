@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   Users, Search, Filter, RefreshCw, Loader2, ChevronDown, ChevronUp,
-  Eye, Zap, Download, Info, Globe, Instagram, Upload, AlertCircle, Check,
+  Eye, Zap, Download, Globe, Check, AlertCircle, Copy, FileText, Terminal,
 } from "lucide-react";
 import { ImportDialog } from "./import-dialog";
 import { ProfileDetail } from "./profile-detail";
@@ -40,6 +40,55 @@ const INTENT_LABELS: Record<string, string> = {
   business: "Бизнес", mixed: "Смешанный",
 };
 
+function buildFetchScript(appUrl: string): string {
+  return `(async()=>{
+  /* Instagramique — загрузка подписчиков */
+  const APP = '${appUrl}';
+  const r0 = await fetch('/api/v1/accounts/current_user/?edit=true');
+  if (!r0.ok) { console.error('❌ Не удалось получить данные аккаунта. Вы залогинены?'); return; }
+  const me = (await r0.json()).user;
+  console.log('👤 ' + me.username + ' (id: ' + me.pk + ')');
+
+  const followers = [];
+  let maxId = null, hasMore = true, page = 0;
+
+  while (hasMore) {
+    const q = new URLSearchParams({count:'50',search_surface:'follow_list_page'});
+    if (maxId) q.set('max_id', maxId);
+    const r = await fetch('/api/v1/friendships/' + me.pk + '/followers/?' + q);
+    if (!r.ok) { console.error('❌ HTTP ' + r.status); break; }
+    const d = await r.json();
+    for (const u of (d.users || [])) {
+      followers.push({
+        username: u.username, full_name: u.full_name || '',
+        profile_picture_url: u.profile_pic_url || '',
+        is_verified: !!u.is_verified, is_private: !!u.is_private
+      });
+    }
+    hasMore = d.has_more && d.next_max_id;
+    maxId = d.next_max_id;
+    console.log('📄 Стр. ' + (++page) + ': ' + followers.length + ' подписчиков');
+    if (hasMore) await new Promise(r => setTimeout(r, 2000));
+  }
+
+  /* Отправляем напрямую в приложение */
+  try {
+    const r = await fetch(APP + '/api/profiling/import', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(followers), mode:'cors'
+    });
+    if (r.ok) { console.log('✅ Готово! ' + followers.length + ' подписчиков отправлены в Instagramique.'); return; }
+  } catch(e) { console.log('⚠️ Прямая отправка не удалась, скачиваем файл...'); }
+
+  /* Фоллбэк — скачиваем файл */
+  const blob = new Blob([JSON.stringify(followers, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'followers_' + me.username + '_' + followers.length + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  console.log('📥 Файл скачан! Загрузите его в Instagramique через кнопку «Импорт».');
+})();`;
+}
+
 export function FollowersTable() {
   const [profiles, setProfiles] = useState<FollowerProfile[]>([]);
   const [total, setTotal] = useState(0);
@@ -54,30 +103,28 @@ export function FollowersTable() {
   const [reprofilingAll, setReprofilingAll] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
-  // Fetch followers dialog
   const [fetchDialogOpen, setFetchDialogOpen] = useState(false);
-  const [fetchSessionId, setFetchSessionId] = useState("");
-  const [fetching, setFetching] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [fetchResult, setFetchResult] = useState<{
-    total_fetched: number;
-    profiled: number;
-    failed: number;
-  } | null>(null);
+  const [fetchTab, setFetchTab] = useState<"script" | "upload">("script");
+  const [copied, setCopied] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ imported: number; failed: number } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Enrich dialog
   const [enrichDialogOpen, setEnrichDialogOpen] = useState(false);
+  const [enrichSessionId, setEnrichSessionId] = useState("");
   const [enriching, setEnriching] = useState(false);
-  const [enrichResult, setEnrichResult] = useState<{
-    total: number; succeeded: number; failed: number;
-  } | null>(null);
+  const [enrichResult, setEnrichResult] = useState<{ total: number; succeeded: number; failed: number } | null>(null);
+
+  const appUrl = useMemo(() =>
+    typeof window !== "undefined" ? window.location.origin : "http://localhost:3000",
+  []);
+  const script = useMemo(() => buildFetchScript(appUrl), [appUrl]);
 
   const fetchProfiles = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        sort_by: sortBy, sort_order: sortOrder, limit: "100",
-      });
+      const params = new URLSearchParams({ sort_by: sortBy, sort_order: sortOrder, limit: "100" });
       if (searchQuery) params.set("search", searchQuery);
       if (selectedSegment) params.set("segment", selectedSegment);
       if (selectedInterest) params.set("interest", selectedInterest);
@@ -96,46 +143,39 @@ export function FollowersTable() {
 
   useEffect(() => { fetchProfiles(); }, [fetchProfiles]);
 
-  // ── Fetch followers from Instagram ──
+  // Auto-refresh: if dialog is open, poll for new data in case the script POSTs directly
+  useEffect(() => {
+    if (!fetchDialogOpen) return;
+    const iv = setInterval(() => { fetchProfiles(); }, 5000);
+    return () => clearInterval(iv);
+  }, [fetchDialogOpen, fetchProfiles]);
 
-  const handleFetchFollowers = async () => {
-    if (!fetchSessionId.trim()) {
-      setFetchError("Вставьте sessionid");
-      return;
-    }
-    setFetching(true);
-    setFetchError(null);
-    setFetchResult(null);
-    try {
-      const res = await fetch("/api/profiling/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "fetch_followers",
-          session_id: fetchSessionId.trim(),
-          delay_ms: 2000,
-          max_pages: 100,
-        }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setFetchError(data.error);
-      } else {
-        setFetchResult({
-          total_fetched: data.total_fetched || 0,
-          profiled: data.profiled || 0,
-          failed: data.failed || 0,
-        });
-        await fetchProfiles();
-      }
-    } catch (err) {
-      setFetchError(err instanceof Error ? err.message : "Ошибка загрузки");
-    } finally {
-      setFetching(false);
-    }
+  const handleCopyScript = async () => {
+    await navigator.clipboard.writeText(script);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
   };
 
-  // ── Enrich weak profiles ──
+  const handleFileUpload = async (file: File) => {
+    setUploadLoading(true);
+    setUploadError(null);
+    setUploadResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/profiling/import", { method: "POST", body: formData });
+      const data = await res.json();
+      if (data.error) setUploadError(data.error);
+      else {
+        setUploadResult({ imported: data.imported, failed: data.failed });
+        fetchProfiles();
+      }
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Ошибка загрузки");
+    } finally {
+      setUploadLoading(false);
+    }
+  };
 
   const handleEnrich = async () => {
     setEnriching(true);
@@ -146,16 +186,12 @@ export function FollowersTable() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "enrich_all",
-          session_id: fetchSessionId.trim() || undefined,
+          session_id: enrichSessionId.trim() || undefined,
           delay_ms: 2000,
         }),
       });
       const data = await res.json();
-      setEnrichResult({
-        total: data.total || 0,
-        succeeded: data.succeeded || 0,
-        failed: data.failed || 0,
-      });
+      setEnrichResult({ total: data.total || 0, succeeded: data.succeeded || 0, failed: data.failed || 0 });
       await fetchProfiles();
     } catch {
       setEnrichResult({ total: 0, succeeded: 0, failed: 1 });
@@ -196,7 +232,7 @@ export function FollowersTable() {
 
   return (
     <div className="space-y-4">
-      {/* ── Empty state: prominent CTA ── */}
+      {/* ── Empty state ── */}
       {!loading && total === 0 && (
         <Card className="border-primary/20">
           <CardContent className="py-10">
@@ -207,17 +243,13 @@ export function FollowersTable() {
               <div>
                 <h3 className="text-lg font-semibold">Загрузите своих подписчиков</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Система автоматически скачает список ваших фолловеров из Instagram,
-                  проанализирует каждый профиль и определит интересы, сегменты и намерения
+                  Скрипт автоматически скачает список подписчиков из Instagram
+                  и отправит его в приложение для анализа
                 </p>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 justify-center">
-                <Button
-                  size="lg"
-                  onClick={() => setFetchDialogOpen(true)}
-                  className="gap-2"
-                >
-                  <Download className="w-5 h-5" />
+                <Button size="lg" onClick={() => setFetchDialogOpen(true)} className="gap-2">
+                  <Terminal className="w-5 h-5" />
                   Загрузить подписчиков
                 </Button>
                 <ImportDialog onImported={fetchProfiles} />
@@ -239,7 +271,7 @@ export function FollowersTable() {
                     {lowCompleteness} из {total} профилей содержат только юзернейм
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Обогатите данные — скрейпер автоматически загрузит bio, аватарки и статистику
+                    Обогатите данные — скрейпер загрузит bio, аватарки и статистику
                   </p>
                 </div>
               </div>
@@ -266,7 +298,7 @@ export function FollowersTable() {
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setFetchDialogOpen(true)} className="gap-1.5">
-                  <Download className="w-4 h-4" />
+                  <Terminal className="w-4 h-4" />
                   Загрузить
                 </Button>
                 <ImportDialog onImported={fetchProfiles} />
@@ -288,15 +320,12 @@ export function FollowersTable() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {/* Search & filters */}
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground" />
                 <input
-                  type="text"
-                  placeholder="Поиск по имени, username, bio..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  type="text" placeholder="Поиск по имени, username, bio..."
+                  value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border bg-background"
                 />
               </div>
@@ -315,11 +344,8 @@ export function FollowersTable() {
                 <FilterSelect label="Intent" value={selectedIntent} onChange={setSelectedIntent} options={INTENT_LABELS} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">Интерес:</span>
-                  <input
-                    type="text" value={selectedInterest} onChange={(e) => setSelectedInterest(e.target.value)}
-                    placeholder="напр. typography"
-                    className="px-2 py-1 text-xs rounded border bg-background w-32"
-                  />
+                  <input type="text" value={selectedInterest} onChange={(e) => setSelectedInterest(e.target.value)}
+                    placeholder="напр. typography" className="px-2 py-1 text-xs rounded border bg-background w-32" />
                 </div>
                 {(selectedSegment || selectedInterest || selectedIntent) && (
                   <Button variant="ghost" size="sm" className="text-xs" onClick={() => {
@@ -329,7 +355,6 @@ export function FollowersTable() {
               </div>
             )}
 
-            {/* Sort */}
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span>Сортировка:</span>
               {[
@@ -338,16 +363,13 @@ export function FollowersTable() {
                 { id: "recency", label: "Дата" },
                 { id: "username", label: "Username" },
               ].map((s) => (
-                <button
-                  key={s.id} onClick={() => toggleSort(s.id)}
-                  className={`px-2 py-0.5 rounded cursor-pointer ${sortBy === s.id ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted"}`}
-                >
+                <button key={s.id} onClick={() => toggleSort(s.id)}
+                  className={`px-2 py-0.5 rounded cursor-pointer ${sortBy === s.id ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted"}`}>
                   {s.label}{sortBy === s.id && (sortOrder === "desc" ? " ↓" : " ↑")}
                 </button>
               ))}
             </div>
 
-            {/* Profiles list */}
             {loading ? (
               <div className="space-y-2">
                 {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16" />)}
@@ -356,10 +378,8 @@ export function FollowersTable() {
               <ScrollArea className="max-h-[600px]">
                 <div className="space-y-1">
                   {profiles.map((p) => (
-                    <button
-                      key={p.id} onClick={() => setSelectedProfile(p)}
-                      className="w-full text-left p-3 rounded-lg hover:bg-muted/50 transition-colors flex items-center gap-3 cursor-pointer"
-                    >
+                    <button key={p.id} onClick={() => setSelectedProfile(p)}
+                      className="w-full text-left p-3 rounded-lg hover:bg-muted/50 transition-colors flex items-center gap-3 cursor-pointer">
                       <Avatar className="w-10 h-10">
                         <AvatarImage src={p.profile_picture_url} />
                         <AvatarFallback className="text-xs">{p.username.slice(0, 2).toUpperCase()}</AvatarFallback>
@@ -396,104 +416,142 @@ export function FollowersTable() {
       {/* ═══════ Fetch Followers Dialog ═══════ */}
       <Dialog open={fetchDialogOpen} onOpenChange={(v) => {
         setFetchDialogOpen(v);
-        if (!v) { setFetchResult(null); setFetchError(null); }
+        if (!v) { setUploadResult(null); setUploadError(null); }
       }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Download className="w-5 h-5" />
+              <Terminal className="w-5 h-5" />
               Загрузить подписчиков
             </DialogTitle>
             <DialogDescription>
-              Автоматическая загрузка списка фолловеров напрямую из Instagram
+              Скрипт работает прямо в вашем браузере — используя вашу сессию Instagram
             </DialogDescription>
           </DialogHeader>
 
-          {fetchResult ? (
+          {/* Tabs */}
+          <div className="flex gap-1">
+            <Button variant={fetchTab === "script" ? "default" : "outline"} size="sm"
+              onClick={() => setFetchTab("script")} className="text-xs gap-1.5">
+              <Terminal className="w-3.5 h-3.5" />
+              Скрипт
+            </Button>
+            <Button variant={fetchTab === "upload" ? "default" : "outline"} size="sm"
+              onClick={() => setFetchTab("upload")} className="text-xs gap-1.5">
+              <FileText className="w-3.5 h-3.5" />
+              Загрузить файл
+            </Button>
+          </div>
+
+          {fetchTab === "script" && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-green-600">
-                <Check className="w-5 h-5" />
-                <span className="font-medium">Загрузка завершена!</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-sm">
-                <StatMini label="Загружено" value={fetchResult.total_fetched} />
-                <StatMini label="Профилировано" value={fetchResult.profiled} />
-                <StatMini label="Ошибки" value={fetchResult.failed} />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Все профили загружены с базовой информацией (имя, аватар, тип аккаунта).
-                Для полного обогащения (bio, статистика, контент) используйте кнопку «Обогатить».
-              </p>
-              <Button className="w-full" onClick={() => { setFetchDialogOpen(false); setFetchResult(null); }}>
-                Готово
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {/* How it works */}
-              <div className="p-3 rounded-lg bg-muted/50 text-xs space-y-2">
-                <p className="font-medium text-foreground">Как это работает:</p>
-                <p className="text-muted-foreground">
-                  Мы используем тот же внутренний API, что и веб-версия Instagram
-                  когда вы открываете список подписчиков. Нужна только ваша сессионная cookie.
-                </p>
-              </div>
-
-              {/* Session ID input */}
+              {/* Instructions */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Session ID</label>
-                <input
-                  type="text"
-                  value={fetchSessionId}
-                  onChange={(e) => setFetchSessionId(e.target.value)}
-                  placeholder="Вставьте sessionid сюда"
-                  className="w-full px-3 py-2 text-sm rounded-lg border bg-background font-mono"
-                  autoComplete="off"
-                />
-              </div>
-
-              {/* Instruction */}
-              <div className="p-3 rounded-lg bg-amber-500/10 text-xs space-y-1.5">
-                <p className="font-medium text-amber-700 dark:text-amber-400">Как получить sessionid (30 секунд):</p>
-                <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                  <li>Откройте <a href="https://www.instagram.com" target="_blank" rel="noopener" className="text-primary hover:underline">instagram.com</a> и убедитесь, что вы залогинены</li>
-                  <li>Нажмите <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">F12</kbd> (или <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">Cmd+Option+I</kbd> на Mac)</li>
-                  <li>Перейдите во вкладку <strong>Application</strong> → <strong>Cookies</strong> → <strong>instagram.com</strong></li>
-                  <li>Найдите <code className="bg-muted px-1 rounded">sessionid</code> и скопируйте значение</li>
-                </ol>
-              </div>
-
-              {/* Error */}
-              {fetchError && (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>{fetchError}</span>
+                <div className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/40">
+                  <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0">1</div>
+                  <div className="text-sm">
+                    <p className="font-medium">Скопируйте скрипт</p>
+                    <p className="text-xs text-muted-foreground">Нажмите кнопку ниже</p>
+                  </div>
                 </div>
-              )}
+                <div className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/40">
+                  <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0">2</div>
+                  <div className="text-sm">
+                    <p className="font-medium">Откройте консоль на Instagram</p>
+                    <p className="text-xs text-muted-foreground">
+                      Перейдите на <a href="https://www.instagram.com" target="_blank" rel="noopener"
+                        className="text-primary hover:underline">instagram.com</a>
+                      {" → "}<kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">F12</kbd>
+                      {" → вкладка "}<strong>Console</strong>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/40">
+                  <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0">3</div>
+                  <div className="text-sm">
+                    <p className="font-medium">Вставьте и запустите</p>
+                    <p className="text-xs text-muted-foreground">
+                      <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">Ctrl+V</kbd> → <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">Enter</kbd>
+                      {" — данные отправятся автоматически"}
+                    </p>
+                  </div>
+                </div>
+              </div>
 
-              {/* Action */}
-              <Button
-                className="w-full"
-                onClick={handleFetchFollowers}
-                disabled={fetching || !fetchSessionId.trim()}
-              >
-                {fetching ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                    Загрузка подписчиков...
-                  </>
+              {/* Copy button */}
+              <Button className="w-full gap-2" onClick={handleCopyScript}>
+                {copied ? (
+                  <><Check className="w-4 h-4" />Скопировано!</>
                 ) : (
-                  <>
-                    <Download className="w-4 h-4 mr-2" />
-                    Загрузить всех подписчиков
-                  </>
+                  <><Copy className="w-4 h-4" />Скопировать скрипт</>
                 )}
               </Button>
 
-              {fetching && (
-                <p className="text-xs text-muted-foreground text-center animate-pulse">
-                  Загружаем фолловеров порциями по 50... Это может занять несколько минут.
-                </p>
+              {/* Script preview */}
+              <details className="group">
+                <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                  Показать скрипт
+                </summary>
+                <pre className="mt-2 p-3 rounded-lg bg-muted/50 text-[10px] leading-relaxed font-mono overflow-auto max-h-48 whitespace-pre-wrap break-all">
+                  {script}
+                </pre>
+              </details>
+
+              {/* How it works */}
+              <div className="p-3 rounded-lg bg-muted/30 text-xs text-muted-foreground space-y-1">
+                <p className="font-medium text-foreground">Как это работает:</p>
+                <ul className="space-y-0.5 list-disc list-inside">
+                  <li>Скрипт запускается на instagram.com — внутри вашей авторизованной сессии</li>
+                  <li>Использует тот же API, что и сам Instagram при показе списка подписчиков</li>
+                  <li>Загружает порциями по 50, с паузой 2 сек между страницами</li>
+                  <li>Данные отправляются напрямую сюда в приложение</li>
+                  <li>Если прямая отправка не сработает — скачается JSON файл</li>
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {fetchTab === "upload" && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Если скрипт скачал файл вместо прямой отправки — загрузите его здесь:
+              </p>
+
+              {uploadResult ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-green-600">
+                    <Check className="w-5 h-5" />
+                    <span className="font-medium">Импортировано: {uploadResult.imported}</span>
+                  </div>
+                  <Button variant="outline" className="w-full" onClick={() => {
+                    setUploadResult(null);
+                    setFetchDialogOpen(false);
+                  }}>Готово</Button>
+                </div>
+              ) : (
+                <>
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                  >
+                    <input ref={fileInputRef} type="file" accept=".json" className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); }} />
+                    {uploadLoading ? (
+                      <Loader2 className="w-8 h-8 mx-auto animate-spin text-muted-foreground" />
+                    ) : (
+                      <>
+                        <FileText className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
+                        <p className="text-sm font-medium">Загрузите followers_*.json</p>
+                        <p className="text-xs text-muted-foreground mt-1">Файл, скачанный скриптом</p>
+                      </>
+                    )}
+                  </div>
+                  {uploadError && (
+                    <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" /><span>{uploadError}</span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -506,15 +564,13 @@ export function FollowersTable() {
           <DialogHeader>
             <DialogTitle>Обогащение профилей</DialogTitle>
             <DialogDescription>
-              Загрузка bio, аватаров и статистики для профилей с неполными данными
+              Загрузка bio, аватаров и статистики для неполных профилей
             </DialogDescription>
           </DialogHeader>
-
           {enrichResult ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-green-600">
-                <Check className="w-5 h-5" />
-                <span className="font-medium">Готово</span>
+                <Check className="w-5 h-5" /><span className="font-medium">Готово</span>
               </div>
               <div className="grid grid-cols-3 gap-2 text-sm">
                 <StatMini label="Обработано" value={enrichResult.total} />
@@ -528,25 +584,16 @@ export function FollowersTable() {
           ) : (
             <div className="space-y-4">
               <div className="p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground">
-                <p>{lowCompleteness} профилей с полнотой данных &lt;30% будут обогащены.</p>
-                <p className="mt-1">Если вы уже вводили sessionid при загрузке — он будет использован.</p>
+                <p>{lowCompleteness} профилей с полнотой &lt;30% будут обогащены через scraping.</p>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium">Session ID (для лучших результатов):</label>
-                <input
-                  type="text"
-                  value={fetchSessionId}
-                  onChange={(e) => setFetchSessionId(e.target.value)}
-                  placeholder="sessionid"
-                  className="w-full px-3 py-1.5 text-xs rounded border bg-background font-mono"
-                />
+                <label className="text-xs font-medium">Session ID (необязательно, для лучших результатов):</label>
+                <input type="text" value={enrichSessionId} onChange={(e) => setEnrichSessionId(e.target.value)}
+                  placeholder="sessionid" className="w-full px-3 py-1.5 text-xs rounded border bg-background font-mono" />
               </div>
               <Button className="w-full" onClick={handleEnrich} disabled={enriching}>
-                {enriching ? (
-                  <><Loader2 className="w-4 h-4 animate-spin mr-2" />Обогащаем...</>
-                ) : (
-                  <><Globe className="w-4 h-4 mr-2" />Обогатить {lowCompleteness} профилей</>
-                )}
+                {enriching ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Обогащаем...</>
+                  : <><Globe className="w-4 h-4 mr-2" />Обогатить {lowCompleteness} профилей</>}
               </Button>
             </div>
           )}
@@ -573,9 +620,7 @@ function StatMini({ label, value }: { label: string; value: number }) {
   );
 }
 
-function FilterSelect({
-  label, value, onChange, options,
-}: {
+function FilterSelect({ label, value, onChange, options }: {
   label: string; value: string; onChange: (v: string) => void; options: Record<string, string>;
 }) {
   return (

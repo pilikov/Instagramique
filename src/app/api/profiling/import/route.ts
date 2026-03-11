@@ -8,6 +8,17 @@ import {
   parseInstagramExportHTML,
 } from "@/lib/profiling/scraper";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Max-Age": "86400",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const contentType = request.headers.get("content-type") || "";
@@ -104,12 +115,12 @@ export async function POST(request: NextRequest) {
       skipped: skipped,
       failed: run.failed,
       errors: run.errors,
-    });
+    }, { headers: CORS_HEADERS });
   } catch (err) {
     console.error("[profiling/import] Error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Import failed" },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }
